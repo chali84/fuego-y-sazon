@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { db } from "./firebase";
 import {
   collection, doc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot
@@ -19,37 +20,17 @@ function getRoute() {
   return { type: "admin" };
 }
 
-// ── QR Generator (canvas, sin dependencias externas) ──
+// ── QR escaneable ──
 function QRCode({ value, size = 140 }) {
-  const canvasRef = useRef(null);
-  useEffect(() => {
-    if (!canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const n = canvas.width;
-    ctx.fillStyle = "#fff8f0";
-    ctx.fillRect(0, 0, n, n);
-    let hash = 0;
-    for (let i = 0; i < value.length; i++) hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
-    const cells = 21, cell = Math.floor(n / cells);
-    const drawFinder = (ox, oy) => {
-      ctx.fillStyle = "#e85d04";
-      ctx.fillRect(ox * cell, oy * cell, 7 * cell, 7 * cell);
-      ctx.fillStyle = "#fff8f0";
-      ctx.fillRect((ox + 1) * cell, (oy + 1) * cell, 5 * cell, 5 * cell);
-      ctx.fillStyle = "#e85d04";
-      ctx.fillRect((ox + 2) * cell, (oy + 2) * cell, 3 * cell, 3 * cell);
-    };
-    drawFinder(0, 0); drawFinder(14, 0); drawFinder(0, 14);
-    const rng = s => { let x = Math.sin(s + hash) * 10000; return x - Math.floor(x); };
-    let idx = 0;
-    for (let r = 0; r < cells; r++) for (let c = 0; c < cells; c++) {
-      const inF = (r < 8 && c < 8) || (r < 8 && c > 12) || (r > 12 && c < 8);
-      if (!inF) { ctx.fillStyle = rng(idx++) > 0.5 ? "#e85d04" : "#fff8f0"; ctx.fillRect(c * cell, r * cell, cell, cell); }
-    }
-    ctx.strokeStyle = "#f48c06"; ctx.lineWidth = 3; ctx.strokeRect(1, 1, n - 2, n - 2);
-  }, [value, size]);
-  return <canvas ref={canvasRef} width={size} height={size} style={{ borderRadius: 10 }} />;
+  return (
+    <QRCodeSVG
+      value={value}
+      size={size}
+      bgColor="#fff8f0"
+      fgColor="#e85d04"
+      style={{ borderRadius: 10, border: "3px solid #f48c06" }}
+    />
+  );
 }
 
 // ── Toast ──
