@@ -23,7 +23,7 @@ function getRoute() {
   return { type: "admin" };
 }
 
-// ── QR escaneable ──
+// ── QR escaneable (sin borde para mejor descarga) ──
 function QRCode({ value, size = 140 }) {
   return (
     <QRCodeSVG
@@ -32,14 +32,14 @@ function QRCode({ value, size = 140 }) {
       bgColor="#ffffff"
       fgColor="#000000"
       data-qr-value={value}
-      style={{ borderRadius: 10, border: "3px solid #f48c06" }}
+      style={{ borderRadius: 4 }}
     />
   );
 }
 
-// ── Descargar QR ──
+// ── Descargar QR (padding generoso para lectura correcta) ──
 function downloadQR(value, filename) {
-  const size = 400, padding = 40, total = size + padding * 2;
+  const size = 400, padding = 60, total = size + padding * 2;
   const svgEl = document.querySelector(`svg[data-qr-value="${value}"]`);
   if (!svgEl) return;
   const clone = svgEl.cloneNode(true);
