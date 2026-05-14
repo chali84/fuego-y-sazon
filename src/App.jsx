@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { Html5Qrcode } from "html5-qrcode";
 import { db } from "./firebase";
 import {
   collection, doc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot
@@ -23,7 +22,7 @@ function getRoute() {
   return { type: "admin" };
 }
 
-// ── QR escaneable (negro para mejor lectura) ──
+// ── QR escaneable ──
 function QRCode({ value, size = 140 }) {
   return (
     <QRCodeSVG
@@ -37,20 +36,16 @@ function QRCode({ value, size = 140 }) {
   );
 }
 
-// ── Descargar QR como imagen ──
+// ── Descargar QR ──
 function downloadQR(value, filename) {
-  const size = 400;
-  const padding = 40;
-  const total = size + padding * 2;
+  const size = 400, padding = 40, total = size + padding * 2;
   const svgEl = document.querySelector(`svg[data-qr-value="${value}"]`);
   if (!svgEl) return;
   const clone = svgEl.cloneNode(true);
   clone.setAttribute("width", size);
   clone.setAttribute("height", size);
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  const svgData = new XMLSerializer().serializeToString(clone);
-  const svg64 = btoa(unescape(encodeURIComponent(svgData)));
-  const imgSrc = "data:image/svg+xml;base64," + svg64;
+  const svg64 = btoa(unescape(encodeURIComponent(new XMLSerializer().serializeToString(clone))));
   const canvas = document.createElement("canvas");
   canvas.width = total; canvas.height = total;
   const ctx = canvas.getContext("2d");
@@ -64,7 +59,7 @@ function downloadQR(value, filename) {
     link.href = canvas.toDataURL("image/png");
     link.click();
   };
-  img.src = imgSrc;
+  img.src = "data:image/svg+xml;base64," + svg64;
 }
 
 // ── Toast ──
@@ -107,56 +102,77 @@ function canRegisterToday(lastVisitTimestamp) {
   return (new Date() - new Date(lastVisitTimestamp)) / (1000 * 60 * 60) >= 24;
 }
 
+// ── Leer QR desde imagen (jsQR via CDN) ──
+async function decodeQRFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        // jsQR debe estar cargado globalmente
+        if (typeof window.jsQR !== "function") {
+          reject(new Error("jsQR no disponible"));
+          return;
+        }
+        const code = window.jsQR(imageData.data, imageData.width, imageData.height);
+        if (code) resolve(code.data);
+        else reject(new Error("No se detectó QR"));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 // ══════════════════════════════════════════
-//  ESCANER QR (fix iOS)
+//  ESCANER QR — input nativo (compatible iOS)
 // ══════════════════════════════════════════
-function QRScanner({ onResult, onClose }) {
-  const [error, setError] = useState("");
-  const scannerRef = useRef(null);
+function QRScanner({ onResult, onClose, onError }) {
+  const inputRef = useRef(null);
 
   useEffect(() => {
-    const scannerId = "qr-scanner-container";
-    const html5QrCode = new Html5Qrcode(scannerId);
-    scannerRef.current = html5QrCode;
-
-    html5QrCode.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 250, height: 250 } },
-      async (decodedText) => {
-        const id = decodedText.split("/cliente/")[1];
-        if (id) {
-          try { await html5QrCode.stop(); } catch { }
-          onResult(id);
-        }
-      },
-      () => { }
-    ).catch(() => {
-      setError("No se pudo acceder a la cámara. Verifica los permisos del navegador.");
-    });
-
-    return () => { html5QrCode.stop().catch(() => { }); };
+    // Cargar jsQR desde CDN si no está disponible
+    if (typeof window.jsQR !== "function") {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js";
+      script.onload = () => { if (inputRef.current) inputRef.current.click(); };
+      script.onerror = () => onError("No se pudo cargar el lector de QR.");
+      document.head.appendChild(script);
+    } else {
+      setTimeout(() => { if (inputRef.current) inputRef.current.click(); }, 100);
+    }
   }, []);
 
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) { onClose(); return; }
+    try {
+      const text = await decodeQRFromFile(file);
+      const id = text.split("/cliente/")[1];
+      if (id) onResult(id);
+      else onError("El QR no corresponde a un cliente de Fuego y Sazón.");
+    } catch {
+      onError("No se pudo leer el QR. Intenta con una foto más clara y bien encuadrada.");
+    }
+  };
+
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "#000c", zIndex: 100,
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center"
-    }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: 20, width: "90%", maxWidth: 380, textAlign: "center" }}>
-        <div style={{ fontWeight: 800, fontSize: 16, color: "#333", marginBottom: 12 }}>📷 Escanear QR del cliente</div>
-        {error
-          ? <div style={{ color: "#e85d04", fontSize: 13, marginBottom: 12 }}>{error}</div>
-          : <>
-            <div id="qr-scanner-container" style={{ width: "100%", borderRadius: 10, overflow: "hidden", marginBottom: 10 }} />
-            <div style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>Apunta la cámara al QR del cliente</div>
-          </>
-        }
-        <button onClick={() => { scannerRef.current?.stop().catch(() => { }); onClose(); }} style={{
-          padding: "9px 24px", background: "#f3e9dc", border: "none",
-          borderRadius: 10, fontWeight: 700, color: "#e85d04", cursor: "pointer", fontSize: 14
-        }}>Cancelar</button>
-      </div>
-    </div>
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={handleFile}
+      />
+    </>
   );
 }
 
@@ -231,7 +247,7 @@ function ClientView({ clientId }) {
 }
 
 // ══════════════════════════════════════════
-//  REGISTRO CLIENTE (ruta /cliente/registro)
+//  REGISTRO CLIENTE
 // ══════════════════════════════════════════
 function RegisterView() {
   const [form, setForm] = useState({ name: "", phone: "" });
@@ -356,10 +372,9 @@ function AdminPanel() {
   const [toast, setToast] = useState(null);
   const [filterReady, setFilterReady] = useState(false);
   const [qrClient, setQrClient] = useState(null);
-  const [showScanner, setShowScanner] = useState(false);
-  const [scanResult, setScanResult] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem("fys_scan") || "null"); } catch { return null; }
-  });
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState(null);
+  const [scanError, setScanError] = useState(null);
   const toastTimer = useRef(null);
 
   useEffect(() => {
@@ -406,33 +421,23 @@ function AdminPanel() {
     showToast("🗑 Cliente eliminado.", "#555");
   };
 
-  // Fix iOS: guarda auth y resultado en sessionStorage para sobrevivir reinicio de Safari
   const handleScanResult = async (clientId) => {
-    setShowScanner(false);
-    await new Promise(r => setTimeout(r, 800));
+    setScanning(false);
     const c = clients.find(x => x.id === clientId);
-    let result;
-    if (!c) {
-      result = { type: "notfound" };
-    } else if (!canRegisterToday(c.lastVisit)) {
-      result = { type: "denied", client: c };
-    } else {
-      const nv = c.visits + 1;
-      await updateDoc(doc(db, "clients", clientId), { visits: nv, lastVisit: new Date().toISOString() });
-      result = {
-        type: nv >= VISITS_GOAL ? "combo" : "success",
-        client: { ...c, visits: nv },
-        visits: nv
-      };
-    }
-    sessionStorage.setItem("fys_auth", "1");
-    sessionStorage.setItem("fys_scan", JSON.stringify(result));
-    setScanResult(result);
+    if (!c) { setScanResult({ type: "notfound" }); return; }
+    if (!canRegisterToday(c.lastVisit)) { setScanResult({ type: "denied", client: c }); return; }
+    const nv = c.visits + 1;
+    await updateDoc(doc(db, "clients", clientId), { visits: nv, lastVisit: new Date().toISOString() });
+    setScanResult({
+      type: nv >= VISITS_GOAL ? "combo" : "success",
+      client: { ...c, visits: nv },
+      visits: nv
+    });
   };
 
-  const clearScanResult = () => {
-    sessionStorage.removeItem("fys_scan");
-    setScanResult(null);
+  const handleScanError = (msg) => {
+    setScanning(false);
+    setScanError(msg);
   };
 
   const filtered = clients.filter(c =>
@@ -443,7 +448,7 @@ function AdminPanel() {
 
   if (!auth) return <PinLogin onSuccess={() => setAuth(true)} />;
 
-  // Pantalla de resultado de escaneo
+  // ── Pantalla de resultado ──
   if (scanResult) {
     const r = scanResult;
     const bgColor = r.type === "denied" ? "#fff3cd" : r.type === "notfound" ? "#f8d7da" : "#d8f3dc";
@@ -453,7 +458,6 @@ function AdminPanel() {
       : r.type === "notfound" ? "Cliente no encontrado"
         : r.type === "combo" ? `¡Completó ${VISITS_GOAL} visitas!`
           : "Visita registrada";
-
     return (
       <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
         <Header sub="Panel Admin · Programa de Lealtad" />
@@ -461,12 +465,10 @@ function AdminPanel() {
           <div style={{ background: bgColor, borderRadius: 20, padding: 30, textAlign: "center", boxShadow: "0 4px 20px #0002", border: `3px solid ${accentColor}` }}>
             <div style={{ fontSize: 72, marginBottom: 10 }}>{icon}</div>
             <div style={{ fontWeight: 800, fontSize: 22, color: accentColor, marginBottom: 8 }}>{title}</div>
-            {r.client && (
-              <>
-                <div style={{ fontWeight: 700, fontSize: 18, color: "#333", marginTop: 12 }}>{r.client.name}</div>
-                <div style={{ color: "#666", fontSize: 13 }}>📱 {r.client.phone}</div>
-              </>
-            )}
+            {r.client && <>
+              <div style={{ fontWeight: 700, fontSize: 18, color: "#333", marginTop: 12 }}>{r.client.name}</div>
+              <div style={{ color: "#666", fontSize: 13 }}>📱 {r.client.phone}</div>
+            </>}
             {r.type === "success" && (
               <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
                 <div style={{ fontSize: 32, fontWeight: 800, color: "#e85d04" }}>{r.visits} / {VISITS_GOAL}</div>
@@ -483,26 +485,13 @@ function AdminPanel() {
             {r.type === "denied" && (
               <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
                 <div style={{ color: "#856404", fontWeight: 600, fontSize: 14 }}>Solo se permite 1 visita cada 24 horas</div>
-                {r.client?.lastVisit && (
-                  <div style={{ color: "#888", fontSize: 12, marginTop: 6 }}>
-                    Última visita: {new Date(r.client.lastVisit).toLocaleDateString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                  </div>
-                )}
+                {r.client?.lastVisit && <div style={{ color: "#888", fontSize: 12, marginTop: 6 }}>Última visita: {new Date(r.client.lastVisit).toLocaleDateString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</div>}
                 <div style={{ color: "#666", fontSize: 13, marginTop: 8 }}>Lleva {r.client?.visits} / {VISITS_GOAL} visitas</div>
               </div>
             )}
             <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
-              <button onClick={() => clearScanResult()} style={{
-                flex: 1, padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)",
-                color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer"
-              }}>← Regresar al panel</button>
-              {r.client && (
-                <button onClick={() => { setSelected(r.client); setView("client"); clearScanResult(); }} style={{
-                  flex: 1, padding: "13px 0", background: "#fff",
-                  color: "#e85d04", border: "2px solid #e85d04", borderRadius: 12,
-                  fontWeight: 800, fontSize: 15, cursor: "pointer"
-                }}>Ver tarjeta</button>
-              )}
+              <button onClick={() => setScanResult(null)} style={{ flex: 1, padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer" }}>← Regresar</button>
+              {r.client && <button onClick={() => { setSelected(r.client); setView("client"); setScanResult(null); }} style={{ flex: 1, padding: "13px 0", background: "#fff", color: "#e85d04", border: "2px solid #e85d04", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer" }}>Ver tarjeta</button>}
             </div>
           </div>
         </div>
@@ -510,17 +499,33 @@ function AdminPanel() {
     );
   }
 
+  // ── Error de escaneo ──
+  if (scanError) return (
+    <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
+      <Header sub="Panel Admin · Programa de Lealtad" />
+      <div style={{ padding: 20, maxWidth: 420, margin: "0 auto" }}>
+        <div style={{ background: "#f8d7da", borderRadius: 20, padding: 30, textAlign: "center", border: "3px solid #721c24" }}>
+          <div style={{ fontSize: 60, marginBottom: 10 }}>⚠️</div>
+          <div style={{ fontWeight: 800, fontSize: 20, color: "#721c24", marginBottom: 12 }}>No se pudo leer el QR</div>
+          <div style={{ color: "#555", fontSize: 14, marginBottom: 20 }}>{scanError}</div>
+          <button onClick={() => { setScanError(null); setScanning(true); }} style={{ width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer", marginBottom: 10 }}>Intentar de nuevo</button>
+          <button onClick={() => setScanError(null)} style={{ width: "100%", padding: "11px 0", background: "none", border: "2px solid #e85d04", color: "#e85d04", borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>← Regresar al panel</button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif", position: "relative" }}>
       <Toast toast={toast} />
-      {showScanner && <QRScanner onResult={handleScanResult} onClose={() => setShowScanner(false)} />}
+      {scanning && <QRScanner onResult={handleScanResult} onClose={() => setScanning(false)} onError={handleScanError} />}
       <Header sub="Panel Admin · Programa de Lealtad" />
 
       {!loaded ? (
         <div style={{ textAlign: "center", padding: 40, color: "#e85d04", fontWeight: 600 }}>Cargando clientes…</div>
       ) : view === "home" ? (
         <div style={{ padding: 16 }}>
-          <button onClick={() => setShowScanner(true)} style={{
+          <button onClick={() => setScanning(true)} style={{
             width: "100%", padding: "13px 0", marginBottom: 14,
             background: "linear-gradient(135deg,#333,#555)",
             color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer"
@@ -589,37 +594,26 @@ function AdminPanel() {
               {cur.visits >= VISITS_GOAL ? `🎉 ¡Completó ${VISITS_GOAL} visitas!` : `${cur.visits} de ${VISITS_GOAL} visitas`}
             </div>
             <TacoStamps visits={Math.min(cur.visits, VISITS_GOAL)} />
-
             {!canRegisterToday(cur.lastVisit) && (
               <div style={{ background: "#fff3cd", borderRadius: 10, padding: "10px 14px", marginBottom: 10, color: "#856404", fontSize: 13, fontWeight: 600 }}>
                 ⏱ Ya se registró una visita hoy. Disponible en 24 hrs.
               </div>
             )}
-
             {cur.visits >= VISITS_GOAL ? (
               <>
                 <div style={{ background: "#d8f3dc", borderRadius: 12, padding: 12, marginBottom: 12, color: "#2d6a4f", fontWeight: 600 }}>🎁 Tiene un combo de regalo disponible</div>
                 <button onClick={() => redeemCombo(cur.id)} style={{ width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#2d6a4f,#40916c)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer", marginBottom: 10 }}>🎁 Canjear Combo</button>
               </>
             ) : (
-              <button onClick={() => addVisit(cur.id)}
-                disabled={!canRegisterToday(cur.lastVisit)}
-                style={{
-                  width: "100%", padding: "13px 0",
-                  background: canRegisterToday(cur.lastVisit) ? "linear-gradient(135deg,#e85d04,#f48c06)" : "#ddd",
-                  color: "#fff", border: "none", borderRadius: 12, fontWeight: 800,
-                  fontSize: 16, cursor: canRegisterToday(cur.lastVisit) ? "pointer" : "not-allowed", marginBottom: 10
-                }}>✅ Registrar Visita de Hoy</button>
+              <button onClick={() => addVisit(cur.id)} disabled={!canRegisterToday(cur.lastVisit)} style={{
+                width: "100%", padding: "13px 0",
+                background: canRegisterToday(cur.lastVisit) ? "linear-gradient(135deg,#e85d04,#f48c06)" : "#ddd",
+                color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16,
+                cursor: canRegisterToday(cur.lastVisit) ? "pointer" : "not-allowed", marginBottom: 10
+              }}>✅ Registrar Visita de Hoy</button>
             )}
-
-            <button onClick={() => removeVisit(cur.id)} style={{
-              width: "100%", padding: "10px 0", background: "none",
-              border: "2px solid #ffb3b3", color: "#cc0000",
-              borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10
-            }}>↩️ Quitar última visita</button>
-
+            <button onClick={() => removeVisit(cur.id)} style={{ width: "100%", padding: "10px 0", background: "none", border: "2px solid #ffb3b3", color: "#cc0000", borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 }}>↩️ Quitar última visita</button>
             <div style={{ color: "#ccc", fontSize: 12, marginBottom: 16 }}>{VISITS_GOAL - Math.min(cur.visits, VISITS_GOAL)} visita(s) para el próximo combo</div>
-
             <div style={{ background: "#f9f9f9", borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8 }}>QR personal del cliente</div>
               <div style={{ display: "flex", justifyContent: "center" }}>
