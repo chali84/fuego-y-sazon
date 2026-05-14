@@ -24,14 +24,14 @@ function getRoute() {
 }
 
 // ── QR escaneable (negro para mejor lectura) ──
-function QRCode({ value, size = 140, id }) {
+function QRCode({ value, size = 140 }) {
   return (
     <QRCodeSVG
       value={value}
       size={size}
       bgColor="#ffffff"
       fgColor="#000000"
-      id={id}
+      data-qr-value={value}
       style={{ borderRadius: 10, border: "3px solid #f48c06" }}
     />
   );
@@ -79,32 +79,42 @@ function canRegisterToday(lastVisitTimestamp) {
   return (now - last) / (1000 * 60 * 60) >= 24;
 }
 
-// ── Descargar QR como imagen (con padding para evitar recorte) ──
-function downloadQR(svgId, filename) {
-  const svg = document.getElementById(svgId);
-  if (!svg) return;
-  const padding = 30;
+// ── Descargar QR como imagen (regenera el SVG con tamaño fijo para evitar recortes) ──
+function downloadQR(value, filename) {
   const size = 400;
+  const padding = 40;
   const total = size + padding * 2;
-  const svgData = new XMLSerializer().serializeToString(svg);
+
+  // Generamos un SVG limpio con dimensiones explícitas usando la API de QR
+  const svgEl = document.querySelector(`svg[data-qr-value="${value}"]`);
+  if (!svgEl) return;
+
+  // Clonamos y agregamos atributos explícitos
+  const clone = svgEl.cloneNode(true);
+  clone.setAttribute("width", size);
+  clone.setAttribute("height", size);
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const svg64 = btoa(unescape(encodeURIComponent(svgData)));
+  const imgSrc = "data:image/svg+xml;base64," + svg64;
+
   const canvas = document.createElement("canvas");
-  canvas.width = total; canvas.height = total;
+  canvas.width = total;
+  canvas.height = total;
   const ctx = canvas.getContext("2d");
+
   const img = new Image();
-  img.width = size; img.height = size;
-  const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
   img.onload = () => {
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, total, total);
     ctx.drawImage(img, padding, padding, size, size);
-    URL.revokeObjectURL(url);
     const link = document.createElement("a");
     link.download = filename;
     link.href = canvas.toDataURL("image/png");
     link.click();
   };
-  img.src = url;
+  img.src = imgSrc;
 }
 
 // ══════════════════════════════════════════
@@ -185,7 +195,6 @@ function ClientView({ clientId }) {
 
   const v = Math.min(client.visits, VISITS_GOAL);
   const hasCombo = client.visits >= VISITS_GOAL;
-  const qrId = `qr-cliente-${client.id}`;
 
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
@@ -220,9 +229,9 @@ function ClientView({ clientId }) {
           <div style={{ marginTop: 20, padding: 16, background: "#f9f9f9", borderRadius: 12 }}>
             <div style={{ fontSize: 12, color: "#aaa", marginBottom: 10 }}>📲 Tu QR personal — muéstralo al registrar tu visita</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-              <QRCode value={`${BASE_URL}/${client.id}`} size={180} id={qrId} />
+              <QRCode value={`${BASE_URL}/${client.id}`} size={180} />
             </div>
-            <button onClick={() => downloadQR(qrId, `qr-lealtad-${client.name.replace(/ /g, "-")}.png`)} style={{
+            <button onClick={() => downloadQR(`${BASE_URL}/${client.id}`, `qr-lealtad-${client.name.replace(/ /g, "-")}.png`)} style={{
               padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
               color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer"
             }}>⬇️ Guardar QR en mi galería</button>
@@ -255,7 +264,6 @@ function RegisterView() {
   };
 
   if (done) {
-    const qrId = `qr-new-${done}`;
     return (
       <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
         <Header sub="¡Registro exitoso!" />
@@ -265,9 +273,9 @@ function RegisterView() {
             <div style={{ fontWeight: 800, fontSize: 20, color: "#333", marginBottom: 8 }}>¡Bienvenido a Fuego y Sazón!</div>
             <div style={{ color: "#aaa", fontSize: 14, marginBottom: 16 }}>Ya estás registrado en nuestro programa de lealtad</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-              <QRCode value={`${BASE_URL}/${done}`} size={200} id={qrId} />
+              <QRCode value={`${BASE_URL}/${done}`} size={200} />
             </div>
-            <button onClick={() => downloadQR(qrId, "qr-lealtad-fuego-y-sazon.png")} style={{
+            <button onClick={() => downloadQR(`${BASE_URL}/${done}`, "qr-lealtad-fuego-y-sazon.png")} style={{
               padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
               color: "#fff", border: "none", borderRadius: 10, fontWeight: 700,
               fontSize: 14, cursor: "pointer", marginBottom: 10
@@ -358,6 +366,7 @@ function AdminPanel() {
   const [filterReady, setFilterReady] = useState(false);
   const [qrClient, setQrClient] = useState(null);
   const [showScanner, setShowScanner] = useState(false);
+  const [scanResult, setScanResult] = useState(null); // { type: "success"|"denied"|"combo", client, visits }
   const toastTimer = useRef(null);
 
   useEffect(() => {
@@ -407,18 +416,21 @@ function AdminPanel() {
   const handleScanResult = async (clientId) => {
     setShowScanner(false);
     const c = clients.find(x => x.id === clientId);
-    if (!c) return showToast("❌ Cliente no encontrado.", "#555");
+    if (!c) {
+      setScanResult({ type: "notfound" });
+      return;
+    }
     if (!canRegisterToday(c.lastVisit)) {
-      setSelected(c);
-      setView("client");
-      return showToast("⛔ Ya se registró una visita en las últimas 24 hrs.", "#555");
+      setScanResult({ type: "denied", client: c });
+      return;
     }
     const nv = c.visits + 1;
     await updateDoc(doc(db, "clients", clientId), { visits: nv, lastVisit: new Date().toISOString() });
-    setSelected({ ...c, visits: nv });
-    setView("client");
-    if (nv === VISITS_GOAL) showToast(`🎉 ¡Completó ${VISITS_GOAL} visitas! Tiene un combo.`, "#2d6a4f");
-    else showToast(`✅ Visita registrada. Lleva ${nv} de ${VISITS_GOAL}.`, "#2d6a4f");
+    setScanResult({
+      type: nv >= VISITS_GOAL ? "combo" : "success",
+      client: { ...c, visits: nv },
+      visits: nv
+    });
   };
 
   const filtered = clients.filter(c =>
@@ -428,6 +440,94 @@ function AdminPanel() {
   const cur = selected ? clients.find(c => c.id === selected.id) : null;
 
   if (!auth) return <PinLogin onSuccess={() => setAuth(true)} />;
+
+  // Pantalla de resultado de escaneo
+  if (scanResult) {
+    const r = scanResult;
+    const bgColor = r.type === "denied" ? "#fff3cd"
+      : r.type === "notfound" ? "#f8d7da"
+        : r.type === "combo" ? "#d8f3dc"
+          : "#d8f3dc";
+    const accentColor = r.type === "denied" ? "#856404"
+      : r.type === "notfound" ? "#721c24"
+        : r.type === "combo" ? "#2d6a4f"
+          : "#2d6a4f";
+    const icon = r.type === "denied" ? "⏱"
+      : r.type === "notfound" ? "❌"
+        : r.type === "combo" ? "🎁"
+          : "✅";
+    const title = r.type === "denied" ? "Visita ya registrada hoy"
+      : r.type === "notfound" ? "Cliente no encontrado"
+        : r.type === "combo" ? `¡Completó ${VISITS_GOAL} visitas!`
+          : "Visita registrada";
+
+    return (
+      <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
+        <Header sub="Panel Admin · Programa de Lealtad" />
+        <div style={{ padding: 20, maxWidth: 420, margin: "0 auto" }}>
+          <div style={{ background: bgColor, borderRadius: 20, padding: 30, textAlign: "center", boxShadow: "0 4px 20px #0002", border: `3px solid ${accentColor}` }}>
+            <div style={{ fontSize: 72, marginBottom: 10 }}>{icon}</div>
+            <div style={{ fontWeight: 800, fontSize: 22, color: accentColor, marginBottom: 8 }}>{title}</div>
+
+            {r.client && (
+              <>
+                <div style={{ fontWeight: 700, fontSize: 18, color: "#333", marginTop: 12 }}>{r.client.name}</div>
+                <div style={{ color: "#666", fontSize: 13 }}>📱 {r.client.phone}</div>
+              </>
+            )}
+
+            {r.type === "success" && (
+              <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
+                <div style={{ fontSize: 32, fontWeight: 800, color: "#e85d04" }}>{r.visits} / {VISITS_GOAL}</div>
+                <div style={{ color: "#666", fontSize: 13, marginTop: 4 }}>visitas acumuladas</div>
+                <div style={{ color: "#aaa", fontSize: 12, marginTop: 6 }}>{VISITS_GOAL - r.visits} para el próximo combo 🌮</div>
+              </div>
+            )}
+
+            {r.type === "combo" && (
+              <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
+                <div style={{ color: "#2d6a4f", fontWeight: 700, fontSize: 16 }}>🎁 Combo de regalo disponible</div>
+                <div style={{ color: "#888", fontSize: 12, marginTop: 6 }}>Puedes canjearlo desde su tarjeta</div>
+              </div>
+            )}
+
+            {r.type === "denied" && (
+              <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
+                <div style={{ color: "#856404", fontWeight: 600, fontSize: 14 }}>
+                  Solo se permite 1 visita cada 24 horas
+                </div>
+                {r.client.lastVisit && (
+                  <div style={{ color: "#888", fontSize: 12, marginTop: 6 }}>
+                    Última visita: {new Date(r.client.lastVisit).toLocaleDateString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                )}
+                <div style={{ color: "#666", fontSize: 13, marginTop: 8 }}>
+                  Lleva {r.client.visits} / {VISITS_GOAL} visitas
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+              <button onClick={() => setScanResult(null)} style={{
+                flex: 1, padding: "13px 0",
+                background: "linear-gradient(135deg,#e85d04,#f48c06)",
+                color: "#fff", border: "none", borderRadius: 12,
+                fontWeight: 800, fontSize: 15, cursor: "pointer"
+              }}>← Regresar al panel</button>
+              {r.client && (
+                <button onClick={() => { setSelected(r.client); setView("client"); setScanResult(null); }} style={{
+                  flex: 1, padding: "13px 0",
+                  background: "#fff",
+                  color: "#e85d04", border: "2px solid #e85d04", borderRadius: 12,
+                  fontWeight: 800, fontSize: 15, cursor: "pointer"
+                }}>Ver tarjeta</button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif", position: "relative" }}>
@@ -555,7 +655,7 @@ function AdminPanel() {
             <div style={{ fontWeight: 800, fontSize: 18, color: "#333", marginBottom: 4 }}>{qrClient.name}</div>
             <div style={{ color: "#aaa", fontSize: 13, marginBottom: 16 }}>QR personal de lealtad</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-              <QRCode value={`${BASE_URL}/${qrClient.id}`} size={180} id={`qr-admin-${qrClient.id}`} />
+              <QRCode value={`${BASE_URL}/${qrClient.id}`} size={180} />
             </div>
             <div style={{ color: "#bbb", fontSize: 12 }}>El cliente escanea este QR para ver su tarjeta actualizada en tiempo real</div>
           </div>
