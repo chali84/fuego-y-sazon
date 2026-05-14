@@ -9,8 +9,8 @@ import {
 const BASE_URL = "https://fuego-y-sazon.vercel.app/cliente";
 const ADMIN_PIN = "791127";
 const VISITS_GOAL = 8;
-const TERMS_URL = "#"; // ← reemplaza con tu URL de términos y condiciones
-const PRIVACY_URL = "#"; // ← reemplaza con tu URL de aviso de privacidad
+const TERMS_URL = "#";
+const PRIVACY_URL = "#";
 
 // ── Detectar ruta ──
 function getRoute() {
@@ -35,6 +35,36 @@ function QRCode({ value, size = 140 }) {
       style={{ borderRadius: 10, border: "3px solid #f48c06" }}
     />
   );
+}
+
+// ── Descargar QR como imagen ──
+function downloadQR(value, filename) {
+  const size = 400;
+  const padding = 40;
+  const total = size + padding * 2;
+  const svgEl = document.querySelector(`svg[data-qr-value="${value}"]`);
+  if (!svgEl) return;
+  const clone = svgEl.cloneNode(true);
+  clone.setAttribute("width", size);
+  clone.setAttribute("height", size);
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const svg64 = btoa(unescape(encodeURIComponent(svgData)));
+  const imgSrc = "data:image/svg+xml;base64," + svg64;
+  const canvas = document.createElement("canvas");
+  canvas.width = total; canvas.height = total;
+  const ctx = canvas.getContext("2d");
+  const img = new Image();
+  img.onload = () => {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, total, total);
+    ctx.drawImage(img, padding, padding, size, size);
+    const link = document.createElement("a");
+    link.download = filename;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+  img.src = imgSrc;
 }
 
 // ── Toast ──
@@ -71,54 +101,14 @@ const Header = ({ sub }) => (
   </div>
 );
 
-// ── Verificar si pasaron 24hrs desde última visita ──
+// ── Verificar 24hrs ──
 function canRegisterToday(lastVisitTimestamp) {
   if (!lastVisitTimestamp) return true;
-  const last = new Date(lastVisitTimestamp);
-  const now = new Date();
-  return (now - last) / (1000 * 60 * 60) >= 24;
-}
-
-// ── Descargar QR como imagen (regenera el SVG con tamaño fijo para evitar recortes) ──
-function downloadQR(value, filename) {
-  const size = 400;
-  const padding = 40;
-  const total = size + padding * 2;
-
-  // Generamos un SVG limpio con dimensiones explícitas usando la API de QR
-  const svgEl = document.querySelector(`svg[data-qr-value="${value}"]`);
-  if (!svgEl) return;
-
-  // Clonamos y agregamos atributos explícitos
-  const clone = svgEl.cloneNode(true);
-  clone.setAttribute("width", size);
-  clone.setAttribute("height", size);
-  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-
-  const svgData = new XMLSerializer().serializeToString(clone);
-  const svg64 = btoa(unescape(encodeURIComponent(svgData)));
-  const imgSrc = "data:image/svg+xml;base64," + svg64;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = total;
-  canvas.height = total;
-  const ctx = canvas.getContext("2d");
-
-  const img = new Image();
-  img.onload = () => {
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, total, total);
-    ctx.drawImage(img, padding, padding, size, size);
-    const link = document.createElement("a");
-    link.download = filename;
-    link.href = canvas.toDataURL("image/png");
-    link.click();
-  };
-  img.src = imgSrc;
+  return (new Date() - new Date(lastVisitTimestamp)) / (1000 * 60 * 60) >= 24;
 }
 
 // ══════════════════════════════════════════
-//  ESCANER QR
+//  ESCANER QR (fix iOS)
 // ══════════════════════════════════════════
 function QRScanner({ onResult, onClose }) {
   const [error, setError] = useState("");
@@ -132,10 +122,10 @@ function QRScanner({ onResult, onClose }) {
     html5QrCode.start(
       { facingMode: "environment" },
       { fps: 10, qrbox: { width: 250, height: 250 } },
-      (decodedText) => {
+      async (decodedText) => {
         const id = decodedText.split("/cliente/")[1];
         if (id) {
-          html5QrCode.stop().catch(() => { });
+          try { await html5QrCode.stop(); } catch { }
           onResult(id);
         }
       },
@@ -195,6 +185,7 @@ function ClientView({ clientId }) {
 
   const v = Math.min(client.visits, VISITS_GOAL);
   const hasCombo = client.visits >= VISITS_GOAL;
+  const qrValue = `${BASE_URL}/${client.id}`;
 
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
@@ -205,12 +196,10 @@ function ClientView({ clientId }) {
           <div style={{ fontWeight: 800, fontSize: 22, color: "#333" }}>{client.name}</div>
           <div style={{ color: "#aaa", fontSize: 13 }}>📱 {client.phone}</div>
           <div style={{ color: "#bbb", fontSize: 12, marginTop: 2 }}>Combos canjeados: {client.canjes}</div>
-
           <div style={{ margin: "14px 0 4px", fontWeight: 700, color: hasCombo ? "#2d6a4f" : "#e85d04", fontSize: 16 }}>
             {hasCombo ? `🎉 ¡Completaste ${VISITS_GOAL} visitas!` : `${client.visits} de ${VISITS_GOAL} visitas`}
           </div>
           <TacoStamps visits={v} />
-
           {hasCombo ? (
             <div style={{ background: "#d8f3dc", borderRadius: 14, padding: 16, marginTop: 8 }}>
               <div style={{ fontSize: 36 }}>🎁</div>
@@ -225,13 +214,12 @@ function ClientView({ clientId }) {
               <div style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>¡Sigue viniendo a Fuego y Sazón!</div>
             </div>
           )}
-
           <div style={{ marginTop: 20, padding: 16, background: "#f9f9f9", borderRadius: 12 }}>
             <div style={{ fontSize: 12, color: "#aaa", marginBottom: 10 }}>📲 Tu QR personal — muéstralo al registrar tu visita</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-              <QRCode value={`${BASE_URL}/${client.id}`} size={180} />
+              <QRCode value={qrValue} size={180} />
             </div>
-            <button onClick={() => downloadQR(`${BASE_URL}/${client.id}`, `qr-lealtad-${client.name.replace(/ /g, "-")}.png`)} style={{
+            <button onClick={() => downloadQR(qrValue, `qr-lealtad-${client.name.replace(/ /g, "-")}.png`)} style={{
               padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
               color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer"
             }}>⬇️ Guardar QR en mi galería</button>
@@ -264,6 +252,7 @@ function RegisterView() {
   };
 
   if (done) {
+    const qrValue = `${BASE_URL}/${done}`;
     return (
       <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
         <Header sub="¡Registro exitoso!" />
@@ -273,9 +262,9 @@ function RegisterView() {
             <div style={{ fontWeight: 800, fontSize: 20, color: "#333", marginBottom: 8 }}>¡Bienvenido a Fuego y Sazón!</div>
             <div style={{ color: "#aaa", fontSize: 14, marginBottom: 16 }}>Ya estás registrado en nuestro programa de lealtad</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-              <QRCode value={`${BASE_URL}/${done}`} size={200} />
+              <QRCode value={qrValue} size={200} />
             </div>
-            <button onClick={() => downloadQR(`${BASE_URL}/${done}`, "qr-lealtad-fuego-y-sazon.png")} style={{
+            <button onClick={() => downloadQR(qrValue, "qr-lealtad-fuego-y-sazon.png")} style={{
               padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
               color: "#fff", border: "none", borderRadius: 10, fontWeight: 700,
               fontSize: 14, cursor: "pointer", marginBottom: 10
@@ -366,7 +355,7 @@ function AdminPanel() {
   const [filterReady, setFilterReady] = useState(false);
   const [qrClient, setQrClient] = useState(null);
   const [showScanner, setShowScanner] = useState(false);
-  const [scanResult, setScanResult] = useState(null); // { type: "success"|"denied"|"combo", client, visits }
+  const [scanResult, setScanResult] = useState(null);
   const toastTimer = useRef(null);
 
   useEffect(() => {
@@ -413,17 +402,13 @@ function AdminPanel() {
     showToast("🗑 Cliente eliminado.", "#555");
   };
 
+  // Fix iOS: delay antes de mostrar resultado para que WebKit libere la cámara
   const handleScanResult = async (clientId) => {
     setShowScanner(false);
+    await new Promise(r => setTimeout(r, 600));
     const c = clients.find(x => x.id === clientId);
-    if (!c) {
-      setScanResult({ type: "notfound" });
-      return;
-    }
-    if (!canRegisterToday(c.lastVisit)) {
-      setScanResult({ type: "denied", client: c });
-      return;
-    }
+    if (!c) { setScanResult({ type: "notfound" }); return; }
+    if (!canRegisterToday(c.lastVisit)) { setScanResult({ type: "denied", client: c }); return; }
     const nv = c.visits + 1;
     await updateDoc(doc(db, "clients", clientId), { visits: nv, lastVisit: new Date().toISOString() });
     setScanResult({
@@ -444,18 +429,9 @@ function AdminPanel() {
   // Pantalla de resultado de escaneo
   if (scanResult) {
     const r = scanResult;
-    const bgColor = r.type === "denied" ? "#fff3cd"
-      : r.type === "notfound" ? "#f8d7da"
-        : r.type === "combo" ? "#d8f3dc"
-          : "#d8f3dc";
-    const accentColor = r.type === "denied" ? "#856404"
-      : r.type === "notfound" ? "#721c24"
-        : r.type === "combo" ? "#2d6a4f"
-          : "#2d6a4f";
-    const icon = r.type === "denied" ? "⏱"
-      : r.type === "notfound" ? "❌"
-        : r.type === "combo" ? "🎁"
-          : "✅";
+    const bgColor = r.type === "denied" ? "#fff3cd" : r.type === "notfound" ? "#f8d7da" : "#d8f3dc";
+    const accentColor = r.type === "denied" ? "#856404" : r.type === "notfound" ? "#721c24" : "#2d6a4f";
+    const icon = r.type === "denied" ? "⏱" : r.type === "notfound" ? "❌" : r.type === "combo" ? "🎁" : "✅";
     const title = r.type === "denied" ? "Visita ya registrada hoy"
       : r.type === "notfound" ? "Cliente no encontrado"
         : r.type === "combo" ? `¡Completó ${VISITS_GOAL} visitas!`
@@ -468,14 +444,12 @@ function AdminPanel() {
           <div style={{ background: bgColor, borderRadius: 20, padding: 30, textAlign: "center", boxShadow: "0 4px 20px #0002", border: `3px solid ${accentColor}` }}>
             <div style={{ fontSize: 72, marginBottom: 10 }}>{icon}</div>
             <div style={{ fontWeight: 800, fontSize: 22, color: accentColor, marginBottom: 8 }}>{title}</div>
-
             {r.client && (
               <>
                 <div style={{ fontWeight: 700, fontSize: 18, color: "#333", marginTop: 12 }}>{r.client.name}</div>
                 <div style={{ color: "#666", fontSize: 13 }}>📱 {r.client.phone}</div>
               </>
             )}
-
             {r.type === "success" && (
               <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
                 <div style={{ fontSize: 32, fontWeight: 800, color: "#e85d04" }}>{r.visits} / {VISITS_GOAL}</div>
@@ -483,41 +457,31 @@ function AdminPanel() {
                 <div style={{ color: "#aaa", fontSize: 12, marginTop: 6 }}>{VISITS_GOAL - r.visits} para el próximo combo 🌮</div>
               </div>
             )}
-
             {r.type === "combo" && (
               <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
                 <div style={{ color: "#2d6a4f", fontWeight: 700, fontSize: 16 }}>🎁 Combo de regalo disponible</div>
                 <div style={{ color: "#888", fontSize: 12, marginTop: 6 }}>Puedes canjearlo desde su tarjeta</div>
               </div>
             )}
-
             {r.type === "denied" && (
               <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginTop: 16 }}>
-                <div style={{ color: "#856404", fontWeight: 600, fontSize: 14 }}>
-                  Solo se permite 1 visita cada 24 horas
-                </div>
-                {r.client.lastVisit && (
+                <div style={{ color: "#856404", fontWeight: 600, fontSize: 14 }}>Solo se permite 1 visita cada 24 horas</div>
+                {r.client?.lastVisit && (
                   <div style={{ color: "#888", fontSize: 12, marginTop: 6 }}>
                     Última visita: {new Date(r.client.lastVisit).toLocaleDateString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                   </div>
                 )}
-                <div style={{ color: "#666", fontSize: 13, marginTop: 8 }}>
-                  Lleva {r.client.visits} / {VISITS_GOAL} visitas
-                </div>
+                <div style={{ color: "#666", fontSize: 13, marginTop: 8 }}>Lleva {r.client?.visits} / {VISITS_GOAL} visitas</div>
               </div>
             )}
-
             <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
               <button onClick={() => setScanResult(null)} style={{
-                flex: 1, padding: "13px 0",
-                background: "linear-gradient(135deg,#e85d04,#f48c06)",
-                color: "#fff", border: "none", borderRadius: 12,
-                fontWeight: 800, fontSize: 15, cursor: "pointer"
+                flex: 1, padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)",
+                color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer"
               }}>← Regresar al panel</button>
               {r.client && (
                 <button onClick={() => { setSelected(r.client); setView("client"); setScanResult(null); }} style={{
-                  flex: 1, padding: "13px 0",
-                  background: "#fff",
+                  flex: 1, padding: "13px 0", background: "#fff",
                   color: "#e85d04", border: "2px solid #e85d04", borderRadius: 12,
                   fontWeight: 800, fontSize: 15, cursor: "pointer"
                 }}>Ver tarjeta</button>
