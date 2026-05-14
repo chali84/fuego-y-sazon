@@ -79,21 +79,25 @@ function canRegisterToday(lastVisitTimestamp) {
   return (now - last) / (1000 * 60 * 60) >= 24;
 }
 
-// ── Descargar QR como imagen ──
+// ── Descargar QR como imagen (con padding para evitar recorte) ──
 function downloadQR(svgId, filename) {
   const svg = document.getElementById(svgId);
   if (!svg) return;
+  const padding = 30;
+  const size = 400;
+  const total = size + padding * 2;
   const svgData = new XMLSerializer().serializeToString(svg);
   const canvas = document.createElement("canvas");
-  canvas.width = 400; canvas.height = 400;
+  canvas.width = total; canvas.height = total;
   const ctx = canvas.getContext("2d");
   const img = new Image();
-  const blob = new Blob([svgData], { type: "image/svg+xml" });
+  img.width = size; img.height = size;
+  const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   img.onload = () => {
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, 400, 400);
-    ctx.drawImage(img, 0, 0, 400, 400);
+    ctx.fillRect(0, 0, total, total);
+    ctx.drawImage(img, padding, padding, size, size);
     URL.revokeObjectURL(url);
     const link = document.createElement("a");
     link.download = filename;
@@ -400,12 +404,21 @@ function AdminPanel() {
     showToast("🗑 Cliente eliminado.", "#555");
   };
 
-  const handleScanResult = (clientId) => {
+  const handleScanResult = async (clientId) => {
     setShowScanner(false);
     const c = clients.find(x => x.id === clientId);
     if (!c) return showToast("❌ Cliente no encontrado.", "#555");
-    setSelected(c);
+    if (!canRegisterToday(c.lastVisit)) {
+      setSelected(c);
+      setView("client");
+      return showToast("⛔ Ya se registró una visita en las últimas 24 hrs.", "#555");
+    }
+    const nv = c.visits + 1;
+    await updateDoc(doc(db, "clients", clientId), { visits: nv, lastVisit: new Date().toISOString() });
+    setSelected({ ...c, visits: nv });
     setView("client");
+    if (nv === VISITS_GOAL) showToast(`🎉 ¡Completó ${VISITS_GOAL} visitas! Tiene un combo.`, "#2d6a4f");
+    else showToast(`✅ Visita registrada. Lleva ${nv} de ${VISITS_GOAL}.`, "#2d6a4f");
   };
 
   const filtered = clients.filter(c =>
