@@ -103,25 +103,39 @@ function canRegisterToday(lastVisitTimestamp) {
   return (new Date() - new Date(lastVisitTimestamp)) / (1000 * 60 * 60) >= 24;
 }
 
-// ── Leer QR desde imagen ──
+// ── Leer QR desde imagen (con preprocesamiento para iOS) ──
 async function decodeQRFromFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
-        if (code) resolve(code.data);
-        else reject(new Error("No se detectó QR"));
+        // Intentar múltiples tamaños para mejorar detección
+        const sizes = [800, 1200, 400];
+        for (const targetSize of sizes) {
+          const scale = Math.min(targetSize / img.width, targetSize / img.height, 1);
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          // Fondo blanco antes de dibujar
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          const imageData = ctx.getImageData(0, 0, w, h);
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "attemptBoth"
+          });
+          if (code) { resolve(code.data); return; }
+        }
+        reject(new Error("No se detectó QR"));
       };
+      img.onerror = () => reject(new Error("Error al cargar imagen"));
       img.src = e.target.result;
     };
+    reader.onerror = () => reject(new Error("Error al leer archivo"));
     reader.readAsDataURL(file);
   });
 }
