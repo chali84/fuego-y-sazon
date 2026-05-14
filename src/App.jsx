@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { Html5Qrcode } from "html5-qrcode";
 import { db } from "./firebase";
 import {
   collection, doc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot
@@ -22,70 +23,16 @@ function getRoute() {
   return { type: "admin" };
 }
 
-// ── QR escaneable ──
-function QRCode({ value, size = 140 }) {
+// ── QR escaneable (negro para mejor lectura) ──
+function QRCode({ value, size = 140, id }) {
   return (
     <QRCodeSVG
       value={value}
       size={size}
-      bgColor="#fff8f0"
-      fgColor="#e85d04"
+      bgColor="#ffffff"
+      fgColor="#000000"
+      id={id}
       style={{ borderRadius: 10, border: "3px solid #f48c06" }}
-    />
-  );
-}
-
-// ── QR descargable (renderiza en canvas oculto y dispara descarga) ──
-function DownloadQRButton({ value, filename }) {
-  const download = () => {
-    const canvas = document.createElement("canvas");
-    const size = 300;
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#fff8f0";
-    ctx.fillRect(0, 0, size, size);
-
-    // Usamos la imagen del SVG QR ya renderizado en el DOM
-    const svg = document.querySelector(`[data-qr="${value}"]`);
-    if (!svg) return;
-    const svgData = new XMLSerializer().serializeToString(svg);
-    const img = new Image();
-    const blob = new Blob([svgData], { type: "image/svg+xml" });
-    const url = URL.createObjectURL(blob);
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0, size, size);
-      URL.revokeObjectURL(url);
-      const link = document.createElement("a");
-      link.download = filename || "qr-lealtad.png";
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    };
-    img.src = url;
-  };
-
-  return (
-    <button onClick={download} style={{
-      marginTop: 10, padding: "9px 20px",
-      background: "linear-gradient(135deg,#e85d04,#f48c06)",
-      color: "#fff", border: "none", borderRadius: 10,
-      fontWeight: 700, fontSize: 13, cursor: "pointer"
-    }}>
-      ⬇️ Guardar QR en mi galería
-    </button>
-  );
-}
-
-// ── QR con atributo para descarga ──
-function QRWithRef({ value, size = 140 }) {
-  return (
-    <QRCodeSVG
-      value={value}
-      size={size}
-      bgColor="#fff8f0"
-      fgColor="#e85d04"
-      style={{ borderRadius: 10, border: "3px solid #f48c06" }}
-      data-qr={value}
     />
   );
 }
@@ -124,14 +71,89 @@ const Header = ({ sub }) => (
   </div>
 );
 
-// ── Utilidad: verificar si pasaron 24hrs desde última visita ──
+// ── Verificar si pasaron 24hrs desde última visita ──
 function canRegisterToday(lastVisitTimestamp) {
   if (!lastVisitTimestamp) return true;
   const last = new Date(lastVisitTimestamp);
   const now = new Date();
-  const diffMs = now - last;
-  const diffHrs = diffMs / (1000 * 60 * 60);
-  return diffHrs >= 24;
+  return (now - last) / (1000 * 60 * 60) >= 24;
+}
+
+// ── Descargar QR como imagen ──
+function downloadQR(svgId, filename) {
+  const svg = document.getElementById(svgId);
+  if (!svg) return;
+  const svgData = new XMLSerializer().serializeToString(svg);
+  const canvas = document.createElement("canvas");
+  canvas.width = 400; canvas.height = 400;
+  const ctx = canvas.getContext("2d");
+  const img = new Image();
+  const blob = new Blob([svgData], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  img.onload = () => {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, 400, 400);
+    ctx.drawImage(img, 0, 0, 400, 400);
+    URL.revokeObjectURL(url);
+    const link = document.createElement("a");
+    link.download = filename;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+  img.src = url;
+}
+
+// ══════════════════════════════════════════
+//  ESCANER QR
+// ══════════════════════════════════════════
+function QRScanner({ onResult, onClose }) {
+  const [error, setError] = useState("");
+  const scannerRef = useRef(null);
+
+  useEffect(() => {
+    const scannerId = "qr-scanner-container";
+    const html5QrCode = new Html5Qrcode(scannerId);
+    scannerRef.current = html5QrCode;
+
+    html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      (decodedText) => {
+        const id = decodedText.split("/cliente/")[1];
+        if (id) {
+          html5QrCode.stop().catch(() => { });
+          onResult(id);
+        }
+      },
+      () => { }
+    ).catch(() => {
+      setError("No se pudo acceder a la cámara. Verifica los permisos del navegador.");
+    });
+
+    return () => { html5QrCode.stop().catch(() => { }); };
+  }, []);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "#000c", zIndex: 100,
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center"
+    }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 20, width: "90%", maxWidth: 380, textAlign: "center" }}>
+        <div style={{ fontWeight: 800, fontSize: 16, color: "#333", marginBottom: 12 }}>📷 Escanear QR del cliente</div>
+        {error
+          ? <div style={{ color: "#e85d04", fontSize: 13, marginBottom: 12 }}>{error}</div>
+          : <>
+            <div id="qr-scanner-container" style={{ width: "100%", borderRadius: 10, overflow: "hidden", marginBottom: 10 }} />
+            <div style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>Apunta la cámara al QR del cliente</div>
+          </>
+        }
+        <button onClick={() => { scannerRef.current?.stop().catch(() => { }); onClose(); }} style={{
+          padding: "9px 24px", background: "#f3e9dc", border: "none",
+          borderRadius: 10, fontWeight: 700, color: "#e85d04", cursor: "pointer", fontSize: 14
+        }}>Cancelar</button>
+      </div>
+    </div>
+  );
 }
 
 // ══════════════════════════════════════════
@@ -159,7 +181,7 @@ function ClientView({ clientId }) {
 
   const v = Math.min(client.visits, VISITS_GOAL);
   const hasCombo = client.visits >= VISITS_GOAL;
-  const qrValue = `${BASE_URL}/${client.id}`;
+  const qrId = `qr-cliente-${client.id}`;
 
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
@@ -191,44 +213,14 @@ function ClientView({ clientId }) {
             </div>
           )}
 
-          {/* QR personal descargable */}
           <div style={{ marginTop: 20, padding: 16, background: "#f9f9f9", borderRadius: 12 }}>
             <div style={{ fontSize: 12, color: "#aaa", marginBottom: 10 }}>📲 Tu QR personal — muéstralo al registrar tu visita</div>
-            <div style={{ display: "flex", justifyContent: "center", marginBottom: 6 }}>
-              <QRCodeSVG
-                value={qrValue}
-                size={160}
-                bgColor="#fff8f0"
-                fgColor="#e85d04"
-                style={{ borderRadius: 10, border: "3px solid #f48c06" }}
-                id={`qr-${client.id}`}
-              />
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+              <QRCode value={`${BASE_URL}/${client.id}`} size={180} id={qrId} />
             </div>
-            <button onClick={() => {
-              const svg = document.getElementById(`qr-${client.id}`);
-              if (!svg) return;
-              const svgData = new XMLSerializer().serializeToString(svg);
-              const canvas = document.createElement("canvas");
-              canvas.width = 400; canvas.height = 400;
-              const ctx = canvas.getContext("2d");
-              const img = new Image();
-              const blob = new Blob([svgData], { type: "image/svg+xml" });
-              const url = URL.createObjectURL(blob);
-              img.onload = () => {
-                ctx.fillStyle = "#fff8f0";
-                ctx.fillRect(0, 0, 400, 400);
-                ctx.drawImage(img, 0, 0, 400, 400);
-                URL.revokeObjectURL(url);
-                const link = document.createElement("a");
-                link.download = `qr-lealtad-${client.name.replace(/ /g, "-")}.png`;
-                link.href = canvas.toDataURL("image/png");
-                link.click();
-              };
-              img.src = url;
-            }} style={{
+            <button onClick={() => downloadQR(qrId, `qr-lealtad-${client.name.replace(/ /g, "-")}.png`)} style={{
               padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
-              color: "#fff", border: "none", borderRadius: 10, fontWeight: 700,
-              fontSize: 14, cursor: "pointer"
+              color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer"
             }}>⬇️ Guardar QR en mi galería</button>
           </div>
         </div>
@@ -258,56 +250,31 @@ function RegisterView() {
     setDone(id);
   };
 
-  if (done) return (
-    <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
-      <Header sub="¡Registro exitoso!" />
-      <div style={{ padding: 20, textAlign: "center" }}>
-        <div style={{ background: "#fff", borderRadius: 16, padding: 24, boxShadow: "0 2px 12px #e85d0420" }}>
-          <div style={{ fontSize: 52 }}>🎉</div>
-          <div style={{ fontWeight: 800, fontSize: 20, color: "#333", marginBottom: 8 }}>¡Bienvenido a Fuego y Sazón!</div>
-          <div style={{ color: "#aaa", fontSize: 14, marginBottom: 16 }}>Ya estás registrado en nuestro programa de lealtad</div>
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
-            <QRCodeSVG
-              value={`${BASE_URL}/${done}`}
-              size={180}
-              bgColor="#fff8f0"
-              fgColor="#e85d04"
-              style={{ borderRadius: 10, border: "3px solid #f48c06" }}
-              id={`qr-new-${done}`}
-            />
+  if (done) {
+    const qrId = `qr-new-${done}`;
+    return (
+      <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
+        <Header sub="¡Registro exitoso!" />
+        <div style={{ padding: 20, textAlign: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: 24, boxShadow: "0 2px 12px #e85d0420" }}>
+            <div style={{ fontSize: 52 }}>🎉</div>
+            <div style={{ fontWeight: 800, fontSize: 20, color: "#333", marginBottom: 8 }}>¡Bienvenido a Fuego y Sazón!</div>
+            <div style={{ color: "#aaa", fontSize: 14, marginBottom: 16 }}>Ya estás registrado en nuestro programa de lealtad</div>
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+              <QRCode value={`${BASE_URL}/${done}`} size={200} id={qrId} />
+            </div>
+            <button onClick={() => downloadQR(qrId, "qr-lealtad-fuego-y-sazon.png")} style={{
+              padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
+              color: "#fff", border: "none", borderRadius: 10, fontWeight: 700,
+              fontSize: 14, cursor: "pointer", marginBottom: 10
+            }}>⬇️ Guardar mi QR en la galería</button>
+            <div style={{ color: "#e85d04", fontWeight: 600, fontSize: 13 }}>Guarda tu QR — es tu tarjeta de lealtad</div>
+            <div style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>Muéstralo en cada visita para acumular tus 🌮</div>
           </div>
-          <button onClick={() => {
-            const svg = document.getElementById(`qr-new-${done}`);
-            if (!svg) return;
-            const svgData = new XMLSerializer().serializeToString(svg);
-            const canvas = document.createElement("canvas");
-            canvas.width = 400; canvas.height = 400;
-            const ctx = canvas.getContext("2d");
-            const img = new Image();
-            const blob = new Blob([svgData], { type: "image/svg+xml" });
-            const url = URL.createObjectURL(blob);
-            img.onload = () => {
-              ctx.fillStyle = "#fff8f0";
-              ctx.fillRect(0, 0, 400, 400);
-              ctx.drawImage(img, 0, 0, 400, 400);
-              URL.revokeObjectURL(url);
-              const link = document.createElement("a");
-              link.download = `qr-lealtad-fuego-y-sazon.png`;
-              link.href = canvas.toDataURL("image/png");
-              link.click();
-            };
-            img.src = url;
-          }} style={{
-            padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
-            color: "#fff", border: "none", borderRadius: 10, fontWeight: 700,
-            fontSize: 14, cursor: "pointer", marginBottom: 10
-          }}>⬇️ Guardar mi QR en la galería</button>
-          <div style={{ color: "#e85d04", fontWeight: 600, fontSize: 13 }}>Guarda tu QR — es tu tarjeta de lealtad</div>
-          <div style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>Muéstralo cada visita para acumular tus 🌮</div>
         </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
@@ -328,87 +295,11 @@ function RegisterView() {
             width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)",
             color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer", marginBottom: 16
           }}>Registrarme 🌮</button>
-
-          {/* Términos y Aviso de privacidad */}
           <div style={{ fontSize: 12, color: "#aaa", lineHeight: 2 }}>
-            <div>
-              <a href={TERMS_URL} target="_blank" rel="noopener noreferrer"
-                style={{ color: "#e85d04", textDecoration: "underline" }}>
-                Términos y condiciones
-              </a>
-            </div>
-            <div>
-              <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer"
-                style={{ color: "#e85d04", textDecoration: "underline" }}>
-                Aviso de privacidad
-              </a>
-            </div>
+            <div><a href={TERMS_URL} target="_blank" rel="noopener noreferrer" style={{ color: "#e85d04", textDecoration: "underline" }}>Términos y condiciones</a></div>
+            <div><a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" style={{ color: "#e85d04", textDecoration: "underline" }}>Aviso de privacidad</a></div>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════
-//  ESCANER QR (admin escanea QR del cliente)
-// ══════════════════════════════════════════
-function QRScanner({ onResult, onClose }) {
-  const videoRef = useRef(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let stream = null;
-    let interval = null;
-
-    const start = async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        if (videoRef.current) videoRef.current.srcObject = stream;
-
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-
-        interval = setInterval(() => {
-          const video = videoRef.current;
-          if (!video || video.readyState !== 4) return;
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          ctx.drawImage(video, 0, 0);
-          // BarcodeDetector API (disponible en Chrome/Android)
-          if ("BarcodeDetector" in window) {
-            const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
-            detector.detect(canvas).then(codes => {
-              if (codes.length > 0) {
-                const raw = codes[0].rawValue;
-                const id = raw.split("/cliente/")[1];
-                if (id) { clearInterval(interval); stream.getTracks().forEach(t => t.stop()); onResult(id); }
-              }
-            }).catch(() => { });
-          }
-        }, 500);
-      } catch {
-        setError("No se pudo acceder a la cámara. Verifica los permisos.");
-      }
-    };
-
-    start();
-    return () => {
-      clearInterval(interval);
-      if (stream) stream.getTracks().forEach(t => t.stop());
-    };
-  }, []);
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "#000c", zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: 20, width: "90%", maxWidth: 360, textAlign: "center" }}>
-        <div style={{ fontWeight: 800, fontSize: 16, color: "#333", marginBottom: 10 }}>📷 Escanear QR del cliente</div>
-        {error
-          ? <div style={{ color: "#e85d04", fontSize: 13, marginBottom: 10 }}>{error}</div>
-          : <video ref={videoRef} autoPlay playsInline style={{ width: "100%", borderRadius: 10, marginBottom: 10 }} />
-        }
-        <div style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>Apunta la cámara al QR del cliente</div>
-        <button onClick={onClose} style={{ padding: "9px 24px", background: "#f3e9dc", border: "none", borderRadius: 10, fontWeight: 700, color: "#e85d04", cursor: "pointer" }}>Cancelar</button>
       </div>
     </div>
   );
@@ -481,12 +372,10 @@ function AdminPanel() {
 
   const addVisit = async (id) => {
     const c = clients.find(x => x.id === id);
-    if (!canRegisterToday(c.lastVisit)) {
-      return showToast("⛔ Ya se registró una visita en las últimas 24 hrs.", "#555");
-    }
+    if (!canRegisterToday(c.lastVisit)) return showToast("⛔ Ya se registró una visita en las últimas 24 hrs.", "#555");
     const nv = c.visits + 1;
     await updateDoc(doc(db, "clients", id), { visits: nv, lastVisit: new Date().toISOString() });
-    if (nv === VISITS_GOAL) showToast("🎉 ¡Completó 8 visitas! Tiene un combo.", "#2d6a4f");
+    if (nv === VISITS_GOAL) showToast(`🎉 ¡Completó ${VISITS_GOAL} visitas! Tiene un combo.`, "#2d6a4f");
     else showToast("✅ Visita registrada.");
   };
 
@@ -537,32 +426,26 @@ function AdminPanel() {
         <div style={{ textAlign: "center", padding: 40, color: "#e85d04", fontWeight: 600 }}>Cargando clientes…</div>
       ) : view === "home" ? (
         <div style={{ padding: 16 }}>
-
-          {/* Botón escanear QR */}
           <button onClick={() => setShowScanner(true)} style={{
             width: "100%", padding: "13px 0", marginBottom: 14,
             background: "linear-gradient(135deg,#333,#555)",
-            color: "#fff", border: "none", borderRadius: 12, fontWeight: 800,
-            fontSize: 15, cursor: "pointer"
+            color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer"
           }}>📷 Escanear QR de cliente</button>
 
-          {/* QR registro general */}
           <div style={{ background: "#fff", borderRadius: 16, padding: 16, marginBottom: 14, boxShadow: "0 2px 10px #e85d0415", textAlign: "center" }}>
             <div style={{ fontWeight: 700, color: "#e85d04", fontSize: 14, marginBottom: 8 }}>📲 QR de Registro para Clientes</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
-              <QRCodeSVG value={`${BASE_URL}/registro`} size={110} bgColor="#fff8f0" fgColor="#e85d04" style={{ borderRadius: 10, border: "3px solid #f48c06" }} />
+              <QRCode value={`${BASE_URL}/registro`} size={110} />
             </div>
             <div style={{ color: "#aaa", fontSize: 11 }}>Imprime este QR en tu mostrador o mesa</div>
           </div>
 
-          {/* Búsqueda */}
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
             <input placeholder="🔍 Buscar por nombre o teléfono..." value={search}
               onChange={e => setSearch(e.target.value)}
               style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: "1.5px solid #f48c06", fontSize: 14, outline: "none" }} />
           </div>
 
-          {/* Filtros */}
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             <button onClick={() => setFilterReady(false)} style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: "none", background: !filterReady ? "#e85d04" : "#f3e9dc", color: !filterReady ? "#fff" : "#888", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
               Todos ({clients.length})
@@ -608,13 +491,11 @@ function AdminPanel() {
                 Última visita: {new Date(cur.lastVisit).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
               </div>
             )}
-
             <div style={{ margin: "14px 0 4px", fontWeight: 700, color: cur.visits >= VISITS_GOAL ? "#2d6a4f" : "#e85d04" }}>
               {cur.visits >= VISITS_GOAL ? `🎉 ¡Completó ${VISITS_GOAL} visitas!` : `${cur.visits} de ${VISITS_GOAL} visitas`}
             </div>
             <TacoStamps visits={Math.min(cur.visits, VISITS_GOAL)} />
 
-            {/* Alerta 24hrs */}
             {!canRegisterToday(cur.lastVisit) && (
               <div style={{ background: "#fff3cd", borderRadius: 10, padding: "10px 14px", marginBottom: 10, color: "#856404", fontSize: 13, fontWeight: 600 }}>
                 ⏱ Ya se registró una visita hoy. Disponible en 24 hrs.
@@ -637,7 +518,6 @@ function AdminPanel() {
                 }}>✅ Registrar Visita de Hoy</button>
             )}
 
-            {/* Botón quitar visita */}
             <button onClick={() => removeVisit(cur.id)} style={{
               width: "100%", padding: "10px 0", background: "none",
               border: "2px solid #ffb3b3", color: "#cc0000",
@@ -649,7 +529,7 @@ function AdminPanel() {
             <div style={{ background: "#f9f9f9", borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8 }}>QR personal del cliente</div>
               <div style={{ display: "flex", justifyContent: "center" }}>
-                <QRCodeSVG value={`${BASE_URL}/${cur.id}`} size={120} bgColor="#fff8f0" fgColor="#e85d04" style={{ borderRadius: 10, border: "3px solid #f48c06" }} />
+                <QRCode value={`${BASE_URL}/${cur.id}`} size={120} />
               </div>
             </div>
           </div>
@@ -662,7 +542,7 @@ function AdminPanel() {
             <div style={{ fontWeight: 800, fontSize: 18, color: "#333", marginBottom: 4 }}>{qrClient.name}</div>
             <div style={{ color: "#aaa", fontSize: 13, marginBottom: 16 }}>QR personal de lealtad</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-              <QRCodeSVG value={`${BASE_URL}/${qrClient.id}`} size={180} bgColor="#fff8f0" fgColor="#e85d04" style={{ borderRadius: 10, border: "3px solid #f48c06" }} id={`qr-admin-${qrClient.id}`} />
+              <QRCode value={`${BASE_URL}/${qrClient.id}`} size={180} id={`qr-admin-${qrClient.id}`} />
             </div>
             <div style={{ color: "#bbb", fontSize: 12 }}>El cliente escanea este QR para ver su tarjeta actualizada en tiempo real</div>
           </div>
