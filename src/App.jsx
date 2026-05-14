@@ -313,8 +313,10 @@ function PinLogin({ onSuccess }) {
   const [pin, setPin] = useState("");
   const [err, setErr] = useState(false);
   const submit = () => {
-    if (pin === ADMIN_PIN) { onSuccess(); }
-    else { setErr(true); setPin(""); setTimeout(() => setErr(false), 1500); }
+    if (pin === ADMIN_PIN) {
+      sessionStorage.setItem("fys_auth", "1");
+      onSuccess();
+    } else { setErr(true); setPin(""); setTimeout(() => setErr(false), 1500); }
   };
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
@@ -347,7 +349,7 @@ function PinLogin({ onSuccess }) {
 function AdminPanel() {
   const [clients, setClients] = useState([]);
   const [loaded, setLoaded] = useState(false);
-  const [auth, setAuth] = useState(false);
+  const [auth, setAuth] = useState(() => sessionStorage.getItem("fys_auth") === "1");
   const [view, setView] = useState("home");
   const [selected, setSelected] = useState(null);
   const [search, setSearch] = useState("");
@@ -355,7 +357,9 @@ function AdminPanel() {
   const [filterReady, setFilterReady] = useState(false);
   const [qrClient, setQrClient] = useState(null);
   const [showScanner, setShowScanner] = useState(false);
-  const [scanResult, setScanResult] = useState(null);
+  const [scanResult, setScanResult] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem("fys_scan") || "null"); } catch { return null; }
+  });
   const toastTimer = useRef(null);
 
   useEffect(() => {
@@ -402,20 +406,33 @@ function AdminPanel() {
     showToast("🗑 Cliente eliminado.", "#555");
   };
 
-  // Fix iOS: delay antes de mostrar resultado para que WebKit libere la cámara
+  // Fix iOS: guarda auth y resultado en sessionStorage para sobrevivir reinicio de Safari
   const handleScanResult = async (clientId) => {
     setShowScanner(false);
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 800));
     const c = clients.find(x => x.id === clientId);
-    if (!c) { setScanResult({ type: "notfound" }); return; }
-    if (!canRegisterToday(c.lastVisit)) { setScanResult({ type: "denied", client: c }); return; }
-    const nv = c.visits + 1;
-    await updateDoc(doc(db, "clients", clientId), { visits: nv, lastVisit: new Date().toISOString() });
-    setScanResult({
-      type: nv >= VISITS_GOAL ? "combo" : "success",
-      client: { ...c, visits: nv },
-      visits: nv
-    });
+    let result;
+    if (!c) {
+      result = { type: "notfound" };
+    } else if (!canRegisterToday(c.lastVisit)) {
+      result = { type: "denied", client: c };
+    } else {
+      const nv = c.visits + 1;
+      await updateDoc(doc(db, "clients", clientId), { visits: nv, lastVisit: new Date().toISOString() });
+      result = {
+        type: nv >= VISITS_GOAL ? "combo" : "success",
+        client: { ...c, visits: nv },
+        visits: nv
+      };
+    }
+    sessionStorage.setItem("fys_auth", "1");
+    sessionStorage.setItem("fys_scan", JSON.stringify(result));
+    setScanResult(result);
+  };
+
+  const clearScanResult = () => {
+    sessionStorage.removeItem("fys_scan");
+    setScanResult(null);
   };
 
   const filtered = clients.filter(c =>
@@ -475,12 +492,12 @@ function AdminPanel() {
               </div>
             )}
             <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
-              <button onClick={() => setScanResult(null)} style={{
+              <button onClick={() => clearScanResult()} style={{
                 flex: 1, padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)",
                 color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 15, cursor: "pointer"
               }}>← Regresar al panel</button>
               {r.client && (
-                <button onClick={() => { setSelected(r.client); setView("client"); setScanResult(null); }} style={{
+                <button onClick={() => { setSelected(r.client); setView("client"); clearScanResult(); }} style={{
                   flex: 1, padding: "13px 0", background: "#fff",
                   color: "#e85d04", border: "2px solid #e85d04", borderRadius: 12,
                   fontWeight: 800, fontSize: 15, cursor: "pointer"
