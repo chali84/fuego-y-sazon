@@ -5,9 +5,11 @@ import {
   collection, doc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot
 } from "firebase/firestore";
 
-const BASE_URL = "https://fuego-y-sazon.vercel.app/cliente"; // ← cambia por tu URL de Vercel
+const BASE_URL = "https://fuego-y-sazon.vercel.app/cliente";
 const ADMIN_PIN = "791127";
 const VISITS_GOAL = 8;
+const TERMS_URL = "#"; // ← reemplaza con tu URL de términos y condiciones
+const PRIVACY_URL = "#"; // ← reemplaza con tu URL de aviso de privacidad
 
 // ── Detectar ruta ──
 function getRoute() {
@@ -33,12 +35,68 @@ function QRCode({ value, size = 140 }) {
   );
 }
 
+// ── QR descargable (renderiza en canvas oculto y dispara descarga) ──
+function DownloadQRButton({ value, filename }) {
+  const download = () => {
+    const canvas = document.createElement("canvas");
+    const size = 300;
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff8f0";
+    ctx.fillRect(0, 0, size, size);
+
+    // Usamos la imagen del SVG QR ya renderizado en el DOM
+    const svg = document.querySelector(`[data-qr="${value}"]`);
+    if (!svg) return;
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const img = new Image();
+    const blob = new Blob([svgData], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      const link = document.createElement("a");
+      link.download = filename || "qr-lealtad.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    };
+    img.src = url;
+  };
+
+  return (
+    <button onClick={download} style={{
+      marginTop: 10, padding: "9px 20px",
+      background: "linear-gradient(135deg,#e85d04,#f48c06)",
+      color: "#fff", border: "none", borderRadius: 10,
+      fontWeight: 700, fontSize: 13, cursor: "pointer"
+    }}>
+      ⬇️ Guardar QR en mi galería
+    </button>
+  );
+}
+
+// ── QR con atributo para descarga ──
+function QRWithRef({ value, size = 140 }) {
+  return (
+    <QRCodeSVG
+      value={value}
+      size={size}
+      bgColor="#fff8f0"
+      fgColor="#e85d04"
+      style={{ borderRadius: 10, border: "3px solid #f48c06" }}
+      data-qr={value}
+    />
+  );
+}
+
 // ── Toast ──
 const Toast = ({ toast }) => toast ? (
   <div style={{
     position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)",
     background: toast.color || "#e85d04", color: "#fff", padding: "10px 22px",
-    borderRadius: 12, fontWeight: 600, zIndex: 999, boxShadow: "0 4px 14px #0003", fontSize: 15, whiteSpace: "nowrap"
+    borderRadius: 12, fontWeight: 600, zIndex: 999, boxShadow: "0 4px 14px #0003",
+    fontSize: 15, whiteSpace: "nowrap"
   }}>{toast.msg}</div>
 ) : null;
 
@@ -66,6 +124,16 @@ const Header = ({ sub }) => (
   </div>
 );
 
+// ── Utilidad: verificar si pasaron 24hrs desde última visita ──
+function canRegisterToday(lastVisitTimestamp) {
+  if (!lastVisitTimestamp) return true;
+  const last = new Date(lastVisitTimestamp);
+  const now = new Date();
+  const diffMs = now - last;
+  const diffHrs = diffMs / (1000 * 60 * 60);
+  return diffHrs >= 24;
+}
+
 // ══════════════════════════════════════════
 //  VISTA CLIENTE (ruta /cliente/:id)
 // ══════════════════════════════════════════
@@ -82,10 +150,16 @@ function ClientView({ clientId }) {
   }, [clientId]);
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#e85d04", fontWeight: 600 }}>Cargando tu tarjeta…</div>;
-  if (!client) return <div style={{ textAlign: "center", padding: 40 }}><div style={{ fontSize: 48 }}>❌</div><div style={{ fontWeight: 700, color: "#e85d04", marginTop: 10 }}>Cliente no encontrado</div></div>;
+  if (!client) return (
+    <div style={{ textAlign: "center", padding: 40 }}>
+      <div style={{ fontSize: 48 }}>❌</div>
+      <div style={{ fontWeight: 700, color: "#e85d04", marginTop: 10 }}>Cliente no encontrado</div>
+    </div>
+  );
 
   const v = Math.min(client.visits, VISITS_GOAL);
   const hasCombo = client.visits >= VISITS_GOAL;
+  const qrValue = `${BASE_URL}/${client.id}`;
 
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
@@ -96,10 +170,12 @@ function ClientView({ clientId }) {
           <div style={{ fontWeight: 800, fontSize: 22, color: "#333" }}>{client.name}</div>
           <div style={{ color: "#aaa", fontSize: 13 }}>📱 {client.phone}</div>
           <div style={{ color: "#bbb", fontSize: 12, marginTop: 2 }}>Combos canjeados: {client.canjes}</div>
+
           <div style={{ margin: "14px 0 4px", fontWeight: 700, color: hasCombo ? "#2d6a4f" : "#e85d04", fontSize: 16 }}>
             {hasCombo ? `🎉 ¡Completaste ${VISITS_GOAL} visitas!` : `${client.visits} de ${VISITS_GOAL} visitas`}
           </div>
           <TacoStamps visits={v} />
+
           {hasCombo ? (
             <div style={{ background: "#d8f3dc", borderRadius: 14, padding: 16, marginTop: 8 }}>
               <div style={{ fontSize: 36 }}>🎁</div>
@@ -114,11 +190,46 @@ function ClientView({ clientId }) {
               <div style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>¡Sigue viniendo a Fuego y Sazón!</div>
             </div>
           )}
-          <div style={{ marginTop: 20, padding: 12, background: "#f9f9f9", borderRadius: 10 }}>
-            <div style={{ fontSize: 11, color: "#bbb", marginBottom: 8 }}>Tu QR personal</div>
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <QRCode value={`${BASE_URL}/${client.id}`} size={100} />
+
+          {/* QR personal descargable */}
+          <div style={{ marginTop: 20, padding: 16, background: "#f9f9f9", borderRadius: 12 }}>
+            <div style={{ fontSize: 12, color: "#aaa", marginBottom: 10 }}>📲 Tu QR personal — muéstralo al registrar tu visita</div>
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 6 }}>
+              <QRCodeSVG
+                value={qrValue}
+                size={160}
+                bgColor="#fff8f0"
+                fgColor="#e85d04"
+                style={{ borderRadius: 10, border: "3px solid #f48c06" }}
+                id={`qr-${client.id}`}
+              />
             </div>
+            <button onClick={() => {
+              const svg = document.getElementById(`qr-${client.id}`);
+              if (!svg) return;
+              const svgData = new XMLSerializer().serializeToString(svg);
+              const canvas = document.createElement("canvas");
+              canvas.width = 400; canvas.height = 400;
+              const ctx = canvas.getContext("2d");
+              const img = new Image();
+              const blob = new Blob([svgData], { type: "image/svg+xml" });
+              const url = URL.createObjectURL(blob);
+              img.onload = () => {
+                ctx.fillStyle = "#fff8f0";
+                ctx.fillRect(0, 0, 400, 400);
+                ctx.drawImage(img, 0, 0, 400, 400);
+                URL.revokeObjectURL(url);
+                const link = document.createElement("a");
+                link.download = `qr-lealtad-${client.name.replace(/ /g, "-")}.png`;
+                link.href = canvas.toDataURL("image/png");
+                link.click();
+              };
+              img.src = url;
+            }} style={{
+              padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
+              color: "#fff", border: "none", borderRadius: 10, fontWeight: 700,
+              fontSize: 14, cursor: "pointer"
+            }}>⬇️ Guardar QR en mi galería</button>
           </div>
         </div>
       </div>
@@ -140,7 +251,10 @@ function RegisterView() {
     const exists = snap.docs.find(d => d.data().phone === form.phone);
     if (exists) return setErr("Ya existe un cliente con ese teléfono.");
     const id = "c" + Date.now();
-    await setDoc(doc(db, "clients", id), { name: form.name.trim(), phone: form.phone.trim(), visits: 0, canjes: 0 });
+    await setDoc(doc(db, "clients", id), {
+      name: form.name.trim(), phone: form.phone.trim(),
+      visits: 0, canjes: 0, lastVisit: null
+    });
     setDone(id);
   };
 
@@ -151,12 +265,45 @@ function RegisterView() {
         <div style={{ background: "#fff", borderRadius: 16, padding: 24, boxShadow: "0 2px 12px #e85d0420" }}>
           <div style={{ fontSize: 52 }}>🎉</div>
           <div style={{ fontWeight: 800, fontSize: 20, color: "#333", marginBottom: 8 }}>¡Bienvenido a Fuego y Sazón!</div>
-          <div style={{ color: "#aaa", fontSize: 14, marginBottom: 20 }}>Ya estás registrado en nuestro programa de lealtad</div>
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-            <QRCode value={`${BASE_URL}/${done}`} size={160} />
+          <div style={{ color: "#aaa", fontSize: 14, marginBottom: 16 }}>Ya estás registrado en nuestro programa de lealtad</div>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
+            <QRCodeSVG
+              value={`${BASE_URL}/${done}`}
+              size={180}
+              bgColor="#fff8f0"
+              fgColor="#e85d04"
+              style={{ borderRadius: 10, border: "3px solid #f48c06" }}
+              id={`qr-new-${done}`}
+            />
           </div>
-          <div style={{ color: "#e85d04", fontWeight: 600, fontSize: 14 }}>Guarda este QR — es tu tarjeta de lealtad</div>
-          <div style={{ color: "#aaa", fontSize: 12, marginTop: 6 }}>Cada visita que registres acumula un 🌮. ¡A las 10 ganas un combo!</div>
+          <button onClick={() => {
+            const svg = document.getElementById(`qr-new-${done}`);
+            if (!svg) return;
+            const svgData = new XMLSerializer().serializeToString(svg);
+            const canvas = document.createElement("canvas");
+            canvas.width = 400; canvas.height = 400;
+            const ctx = canvas.getContext("2d");
+            const img = new Image();
+            const blob = new Blob([svgData], { type: "image/svg+xml" });
+            const url = URL.createObjectURL(blob);
+            img.onload = () => {
+              ctx.fillStyle = "#fff8f0";
+              ctx.fillRect(0, 0, 400, 400);
+              ctx.drawImage(img, 0, 0, 400, 400);
+              URL.revokeObjectURL(url);
+              const link = document.createElement("a");
+              link.download = `qr-lealtad-fuego-y-sazon.png`;
+              link.href = canvas.toDataURL("image/png");
+              link.click();
+            };
+            img.src = url;
+          }} style={{
+            padding: "10px 22px", background: "linear-gradient(135deg,#e85d04,#f48c06)",
+            color: "#fff", border: "none", borderRadius: 10, fontWeight: 700,
+            fontSize: 14, cursor: "pointer", marginBottom: 10
+          }}>⬇️ Guardar mi QR en la galería</button>
+          <div style={{ color: "#e85d04", fontWeight: 600, fontSize: 13 }}>Guarda tu QR — es tu tarjeta de lealtad</div>
+          <div style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>Muéstralo cada visita para acumular tus 🌮</div>
         </div>
       </div>
     </div>
@@ -179,15 +326,97 @@ function RegisterView() {
             style={{ width: "100%", padding: "11px 14px", borderRadius: 10, border: "1.5px solid #f48c06", fontSize: 14, outline: "none", boxSizing: "border-box", marginBottom: 16 }} />
           <button onClick={submit} style={{
             width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)",
-            color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer"
+            color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer", marginBottom: 16
           }}>Registrarme 🌮</button>
+
+          {/* Términos y Aviso de privacidad */}
+          <div style={{ fontSize: 12, color: "#aaa", lineHeight: 2 }}>
+            <div>
+              <a href={TERMS_URL} target="_blank" rel="noopener noreferrer"
+                style={{ color: "#e85d04", textDecoration: "underline" }}>
+                Términos y condiciones
+              </a>
+            </div>
+            <div>
+              <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer"
+                style={{ color: "#e85d04", textDecoration: "underline" }}>
+                Aviso de privacidad
+              </a>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-// ── PIN Login ──
+// ══════════════════════════════════════════
+//  ESCANER QR (admin escanea QR del cliente)
+// ══════════════════════════════════════════
+function QRScanner({ onResult, onClose }) {
+  const videoRef = useRef(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let stream = null;
+    let interval = null;
+
+    const start = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        if (videoRef.current) videoRef.current.srcObject = stream;
+
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+
+        interval = setInterval(() => {
+          const video = videoRef.current;
+          if (!video || video.readyState !== 4) return;
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0);
+          // BarcodeDetector API (disponible en Chrome/Android)
+          if ("BarcodeDetector" in window) {
+            const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+            detector.detect(canvas).then(codes => {
+              if (codes.length > 0) {
+                const raw = codes[0].rawValue;
+                const id = raw.split("/cliente/")[1];
+                if (id) { clearInterval(interval); stream.getTracks().forEach(t => t.stop()); onResult(id); }
+              }
+            }).catch(() => { });
+          }
+        }, 500);
+      } catch {
+        setError("No se pudo acceder a la cámara. Verifica los permisos.");
+      }
+    };
+
+    start();
+    return () => {
+      clearInterval(interval);
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000c", zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 20, width: "90%", maxWidth: 360, textAlign: "center" }}>
+        <div style={{ fontWeight: 800, fontSize: 16, color: "#333", marginBottom: 10 }}>📷 Escanear QR del cliente</div>
+        {error
+          ? <div style={{ color: "#e85d04", fontSize: 13, marginBottom: 10 }}>{error}</div>
+          : <video ref={videoRef} autoPlay playsInline style={{ width: "100%", borderRadius: 10, marginBottom: 10 }} />
+        }
+        <div style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>Apunta la cámara al QR del cliente</div>
+        <button onClick={onClose} style={{ padding: "9px 24px", background: "#f3e9dc", border: "none", borderRadius: 10, fontWeight: 700, color: "#e85d04", cursor: "pointer" }}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+//  PIN LOGIN
+// ══════════════════════════════════════════
 function PinLogin({ onSuccess }) {
   const [pin, setPin] = useState("");
   const [err, setErr] = useState(false);
@@ -197,11 +426,7 @@ function PinLogin({ onSuccess }) {
   };
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif" }}>
-      <div style={{ background: "linear-gradient(135deg,#e85d04,#f48c06)", padding: "16px 20px 12px", textAlign: "center" }}>
-        <div style={{ fontSize: 28 }}>🔥</div>
-        <div style={{ color: "#fff", fontWeight: 800, fontSize: 20 }}>Fuego y Sazón</div>
-        <div style={{ color: "#ffe8cc", fontSize: 12 }}>Panel Admin</div>
-      </div>
+      <Header sub="Panel Admin" />
       <div style={{ padding: 30, maxWidth: 320, margin: "0 auto", textAlign: "center" }}>
         <div style={{ background: "#fff", borderRadius: 20, padding: 28, boxShadow: "0 4px 20px #e85d0420" }}>
           <div style={{ fontSize: 40, marginBottom: 8 }}>🔒</div>
@@ -212,10 +437,10 @@ function PinLogin({ onSuccess }) {
             value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ""))}
             onKeyDown={e => e.key === "Enter" && submit()}
             placeholder="••••••"
-            style={{ width: "100%", padding: "14px", borderRadius: 12, border: `2px solid ${err ? "#e85d04" : "#f48c06"}`, fontSize: 22, textAlign: "center", outline: "none", letterSpacing: 8, boxSizing: "border-box", marginBottom: 8, background: err ? "#fff0f0" : "#fff", transition: "all 0.2s" }}
+            style={{ width: "100%", padding: "14px", borderRadius: 12, border: `2px solid ${err ? "#e85d04" : "#f48c06"}`, fontSize: 22, textAlign: "center", outline: "none", letterSpacing: 8, boxSizing: "border-box", marginBottom: 8, background: err ? "#fff0f0" : "#fff" }}
           />
-          {err && <div style={{ color: "#e85d04", fontSize: 13, marginBottom: 8 }}>PIN incorrecto, intenta de nuevo</div>}
-          <button onClick={submit} style={{ width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer", marginTop: 4 }}>
+          {err && <div style={{ color: "#e85d04", fontSize: 13, marginBottom: 8 }}>PIN incorrecto</div>}
+          <button onClick={submit} style={{ width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer" }}>
             Entrar
           </button>
         </div>
@@ -225,7 +450,7 @@ function PinLogin({ onSuccess }) {
 }
 
 // ══════════════════════════════════════════
-//  PANEL ADMIN (ruta /)
+//  PANEL ADMIN
 // ══════════════════════════════════════════
 function AdminPanel() {
   const [clients, setClients] = useState([]);
@@ -237,6 +462,7 @@ function AdminPanel() {
   const [toast, setToast] = useState(null);
   const [filterReady, setFilterReady] = useState(false);
   const [qrClient, setQrClient] = useState(null);
+  const [showScanner, setShowScanner] = useState(false);
   const toastTimer = useRef(null);
 
   useEffect(() => {
@@ -255,10 +481,21 @@ function AdminPanel() {
 
   const addVisit = async (id) => {
     const c = clients.find(x => x.id === id);
+    if (!canRegisterToday(c.lastVisit)) {
+      return showToast("⛔ Ya se registró una visita en las últimas 24 hrs.", "#555");
+    }
     const nv = c.visits + 1;
-    await updateDoc(doc(db, "clients", id), { visits: nv });
+    await updateDoc(doc(db, "clients", id), { visits: nv, lastVisit: new Date().toISOString() });
     if (nv === VISITS_GOAL) showToast("🎉 ¡Completó 8 visitas! Tiene un combo.", "#2d6a4f");
     else showToast("✅ Visita registrada.");
+  };
+
+  const removeVisit = async (id) => {
+    const c = clients.find(x => x.id === id);
+    if (c.visits <= 0) return showToast("El cliente ya tiene 0 visitas.", "#555");
+    if (!window.confirm("¿Quitar 1 visita a este cliente?")) return;
+    await updateDoc(doc(db, "clients", id), { visits: c.visits - 1 });
+    showToast("↩️ Visita eliminada.", "#555");
   };
 
   const redeemCombo = async (id) => {
@@ -274,10 +511,18 @@ function AdminPanel() {
     showToast("🗑 Cliente eliminado.", "#555");
   };
 
+  const handleScanResult = (clientId) => {
+    setShowScanner(false);
+    const c = clients.find(x => x.id === clientId);
+    if (!c) return showToast("❌ Cliente no encontrado.", "#555");
+    setSelected(c);
+    setView("client");
+  };
+
   const filtered = clients.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search)
   );
-  const displayed = filterReady ? filtered.filter(c => c.visits >= 10) : filtered;
+  const displayed = filterReady ? filtered.filter(c => c.visits >= VISITS_GOAL) : filtered;
   const cur = selected ? clients.find(c => c.id === selected.id) : null;
 
   if (!auth) return <PinLogin onSuccess={() => setAuth(true)} />;
@@ -285,27 +530,39 @@ function AdminPanel() {
   return (
     <div style={{ minHeight: "100vh", background: "#fff8f0", fontFamily: "'Segoe UI',sans-serif", position: "relative" }}>
       <Toast toast={toast} />
+      {showScanner && <QRScanner onResult={handleScanResult} onClose={() => setShowScanner(false)} />}
       <Header sub="Panel Admin · Programa de Lealtad" />
 
       {!loaded ? (
         <div style={{ textAlign: "center", padding: 40, color: "#e85d04", fontWeight: 600 }}>Cargando clientes…</div>
       ) : view === "home" ? (
         <div style={{ padding: 16 }}>
-          {/* QR de registro */}
+
+          {/* Botón escanear QR */}
+          <button onClick={() => setShowScanner(true)} style={{
+            width: "100%", padding: "13px 0", marginBottom: 14,
+            background: "linear-gradient(135deg,#333,#555)",
+            color: "#fff", border: "none", borderRadius: 12, fontWeight: 800,
+            fontSize: 15, cursor: "pointer"
+          }}>📷 Escanear QR de cliente</button>
+
+          {/* QR registro general */}
           <div style={{ background: "#fff", borderRadius: 16, padding: 16, marginBottom: 14, boxShadow: "0 2px 10px #e85d0415", textAlign: "center" }}>
             <div style={{ fontWeight: 700, color: "#e85d04", fontSize: 14, marginBottom: 8 }}>📲 QR de Registro para Clientes</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
-              <QRCode value={`${BASE_URL}/registro`} size={110} />
+              <QRCodeSVG value={`${BASE_URL}/registro`} size={110} bgColor="#fff8f0" fgColor="#e85d04" style={{ borderRadius: 10, border: "3px solid #f48c06" }} />
             </div>
             <div style={{ color: "#aaa", fontSize: 11 }}>Imprime este QR en tu mostrador o mesa</div>
           </div>
 
+          {/* Búsqueda */}
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
             <input placeholder="🔍 Buscar por nombre o teléfono..." value={search}
               onChange={e => setSearch(e.target.value)}
               style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: "1.5px solid #f48c06", fontSize: 14, outline: "none" }} />
           </div>
 
+          {/* Filtros */}
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             <button onClick={() => setFilterReady(false)} style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: "none", background: !filterReady ? "#e85d04" : "#f3e9dc", color: !filterReady ? "#fff" : "#888", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
               Todos ({clients.length})
@@ -318,7 +575,7 @@ function AdminPanel() {
           {displayed.length === 0 && <div style={{ textAlign: "center", color: "#aaa", marginTop: 40 }}>No se encontraron clientes.</div>}
 
           {displayed.map(c => (
-            <div key={c.id} style={{ background: "#fff", borderRadius: 14, padding: "12px 16px", marginBottom: 10, boxShadow: "0 2px 8px #e85d0415", border: c.visits >= 10 ? "2px solid #2d6a4f" : "1.5px solid #f3e9dc" }}>
+            <div key={c.id} style={{ background: "#fff", borderRadius: 14, padding: "12px 16px", marginBottom: 10, boxShadow: "0 2px 8px #e85d0415", border: c.visits >= VISITS_GOAL ? "2px solid #2d6a4f" : "1.5px solid #f3e9dc" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div onClick={() => { setSelected(c); setView("client"); }} style={{ cursor: "pointer", flex: 1 }}>
                   <div style={{ fontWeight: 700, fontSize: 15, color: "#333" }}>{c.name}</div>
@@ -346,23 +603,53 @@ function AdminPanel() {
             <div style={{ fontWeight: 800, fontSize: 20, color: "#333" }}>{cur.name}</div>
             <div style={{ color: "#aaa", fontSize: 13 }}>📱 {cur.phone}</div>
             <div style={{ color: "#bbb", fontSize: 12, marginTop: 2 }}>Canjes totales: {cur.canjes}</div>
-            <div style={{ margin: "14px 0 4px", fontWeight: 700, color: cur.visits >= 10 ? "#2d6a4f" : "#e85d04" }}>
-              {cur.visits >= VISITS_GOAL ? "🎉 ¡Completó 8 visitas!" : `${cur.visits} de ${VISITS_GOAL} visitas`}
+            {cur.lastVisit && (
+              <div style={{ color: "#bbb", fontSize: 11, marginTop: 2 }}>
+                Última visita: {new Date(cur.lastVisit).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </div>
+            )}
+
+            <div style={{ margin: "14px 0 4px", fontWeight: 700, color: cur.visits >= VISITS_GOAL ? "#2d6a4f" : "#e85d04" }}>
+              {cur.visits >= VISITS_GOAL ? `🎉 ¡Completó ${VISITS_GOAL} visitas!` : `${cur.visits} de ${VISITS_GOAL} visitas`}
             </div>
             <TacoStamps visits={Math.min(cur.visits, VISITS_GOAL)} />
+
+            {/* Alerta 24hrs */}
+            {!canRegisterToday(cur.lastVisit) && (
+              <div style={{ background: "#fff3cd", borderRadius: 10, padding: "10px 14px", marginBottom: 10, color: "#856404", fontSize: 13, fontWeight: 600 }}>
+                ⏱ Ya se registró una visita hoy. Disponible en 24 hrs.
+              </div>
+            )}
+
             {cur.visits >= VISITS_GOAL ? (
               <>
                 <div style={{ background: "#d8f3dc", borderRadius: 12, padding: 12, marginBottom: 12, color: "#2d6a4f", fontWeight: 600 }}>🎁 Tiene un combo de regalo disponible</div>
                 <button onClick={() => redeemCombo(cur.id)} style={{ width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#2d6a4f,#40916c)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer", marginBottom: 10 }}>🎁 Canjear Combo</button>
               </>
             ) : (
-              <button onClick={() => addVisit(cur.id)} style={{ width: "100%", padding: "13px 0", background: "linear-gradient(135deg,#e85d04,#f48c06)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: "pointer", marginBottom: 10 }}>✅ Registrar Visita de Hoy</button>
+              <button onClick={() => addVisit(cur.id)}
+                disabled={!canRegisterToday(cur.lastVisit)}
+                style={{
+                  width: "100%", padding: "13px 0",
+                  background: canRegisterToday(cur.lastVisit) ? "linear-gradient(135deg,#e85d04,#f48c06)" : "#ddd",
+                  color: "#fff", border: "none", borderRadius: 12, fontWeight: 800,
+                  fontSize: 16, cursor: canRegisterToday(cur.lastVisit) ? "pointer" : "not-allowed", marginBottom: 10
+                }}>✅ Registrar Visita de Hoy</button>
             )}
+
+            {/* Botón quitar visita */}
+            <button onClick={() => removeVisit(cur.id)} style={{
+              width: "100%", padding: "10px 0", background: "none",
+              border: "2px solid #ffb3b3", color: "#cc0000",
+              borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10
+            }}>↩️ Quitar última visita</button>
+
             <div style={{ color: "#ccc", fontSize: 12, marginBottom: 16 }}>{VISITS_GOAL - Math.min(cur.visits, VISITS_GOAL)} visita(s) para el próximo combo</div>
+
             <div style={{ background: "#f9f9f9", borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8 }}>QR personal del cliente</div>
               <div style={{ display: "flex", justifyContent: "center" }}>
-                <QRCode value={`${BASE_URL}/${cur.id}`} size={120} />
+                <QRCodeSVG value={`${BASE_URL}/${cur.id}`} size={120} bgColor="#fff8f0" fgColor="#e85d04" style={{ borderRadius: 10, border: "3px solid #f48c06" }} />
               </div>
             </div>
           </div>
@@ -375,7 +662,7 @@ function AdminPanel() {
             <div style={{ fontWeight: 800, fontSize: 18, color: "#333", marginBottom: 4 }}>{qrClient.name}</div>
             <div style={{ color: "#aaa", fontSize: 13, marginBottom: 16 }}>QR personal de lealtad</div>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-              <QRCode value={`${BASE_URL}/${qrClient.id}`} size={180} />
+              <QRCodeSVG value={`${BASE_URL}/${qrClient.id}`} size={180} bgColor="#fff8f0" fgColor="#e85d04" style={{ borderRadius: 10, border: "3px solid #f48c06" }} id={`qr-admin-${qrClient.id}`} />
             </div>
             <div style={{ color: "#bbb", fontSize: 12 }}>El cliente escanea este QR para ver su tarjeta actualizada en tiempo real</div>
           </div>
