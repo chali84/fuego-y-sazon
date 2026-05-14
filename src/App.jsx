@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import jsQR from "jsqr";
 import { db } from "./firebase";
 import {
   collection, doc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot
@@ -102,7 +103,7 @@ function canRegisterToday(lastVisitTimestamp) {
   return (new Date() - new Date(lastVisitTimestamp)) / (1000 * 60 * 60) >= 24;
 }
 
-// ── Leer QR desde imagen (jsQR via CDN) ──
+// ── Leer QR desde imagen ──
 async function decodeQRFromFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -115,12 +116,7 @@ async function decodeQRFromFile(file) {
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        // jsQR debe estar cargado globalmente
-        if (typeof window.jsQR !== "function") {
-          reject(new Error("jsQR no disponible"));
-          return;
-        }
-        const code = window.jsQR(imageData.data, imageData.width, imageData.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
         if (code) resolve(code.data);
         else reject(new Error("No se detectó QR"));
       };
@@ -137,16 +133,7 @@ function QRScanner({ onResult, onClose, onError }) {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    // Cargar jsQR desde CDN si no está disponible
-    if (typeof window.jsQR !== "function") {
-      const script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js";
-      script.onload = () => { if (inputRef.current) inputRef.current.click(); };
-      script.onerror = () => onError("No se pudo cargar el lector de QR.");
-      document.head.appendChild(script);
-    } else {
-      setTimeout(() => { if (inputRef.current) inputRef.current.click(); }, 100);
-    }
+    setTimeout(() => { if (inputRef.current) inputRef.current.click(); }, 100);
   }, []);
 
   const handleFile = async (e) => {
@@ -163,16 +150,14 @@ function QRScanner({ onResult, onClose, onError }) {
   };
 
   return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        style={{ display: "none" }}
-        onChange={handleFile}
-      />
-    </>
+    <input
+      ref={inputRef}
+      type="file"
+      accept="image/*"
+      capture="environment"
+      style={{ display: "none" }}
+      onChange={handleFile}
+    />
   );
 }
 
