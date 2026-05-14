@@ -154,7 +154,6 @@ function QRScanner({ onResult, onClose, onError }) {
       ref={inputRef}
       type="file"
       accept="image/*"
-      capture="environment"
       style={{ display: "none" }}
       onChange={handleFile}
     />
